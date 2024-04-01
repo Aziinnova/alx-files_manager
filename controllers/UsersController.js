@@ -1,58 +1,52 @@
-import sha1 from 'sha1';
-import { ObjectId } from 'mongodb';
-import dbClient from '../utils/db';
-import redisClient from '../utils/redis';
+// controllers/UsersController.js
 
-class UsersController {
-  static async postNew (request, response) {
-    const { email, password } = request.body;
-    if (!email) {
-      response.status(400).json({ error: 'Missing email' });
-    }
-    if (!password) {
-      response.status(400).json({ error: 'Missing password' });
-    }
+const { v4: uuidv4 } = require('uuid');
+const dbClient = require('../utils/db');
+const crypto = require('crypto');
 
-    const hashPwd = sha1(password);
+exports.postNew = async (req, res) => {
+  const { email, password } = req.body;
 
-    try {
-      const collection = dbClient.db.collection('users');
-      const user1 = await collection.findOne({ email });
-
-      if (user1) {
-        response.status(400).json({ error: 'Already exist' });
-      } else {
-        collection.insertOne({ email, password: hashPwd });
-        const newUser = await collection.findOne(
-          { email }, { projection: { email: 1 } }
-        );
-        response.status(201).json({ id: newUser._id, email: newUser.email });
-      }
-    } catch (error) {
-      console.log(error);
-      response.status(500).json({ error: 'Server error' });
-    }
+  if (!email) {
+    return res.status(400).json({ error: 'Missing email' });
   }
 
-  static async getMe (request, response) {
-    try {
-      const userToken = request.header('X-Token');
-      const authKey = `auth_${userToken}`;
-      // console.log('USER TOKEN GET ME', userToken);
-      const userID = await redisClient.get(authKey);
-      console.log('USER KEY GET ME', userID);
-      if (!userID) {
-        response.status(401).json({ error: 'Unauthorized' });
-      }
-      const user = await dbClient.getUser({ _id: ObjectId(userID) });
-      // console.log('USER GET ME', user);
-      response.json({ id: user._id, email: user.email });
-    } catch (error) {
-      console.log(error);
-      response.status(500).json({ error: 'Server error' });
-    }
+  if (!password) {
+    return res.status(400).json({ error: 'Missing password' });
   }
-}
 
-export default UsersController;
-// export default postNew();
+  try {
+    const db = dbClient.client.db();
+    const usersCollection = db.collection('users');
+
+    // Check if the email already exists
+    const existingUser = await usersCollection.findOne({ email });
+
+    if (existingUser) {
+      return res.status(400).json({ error: 'Email already exists' });
+    }
+
+    // Hash the password
+    const hashedPassword = crypto.createHash('sha1').update(password).digest('hex');
+
+    // Create new user
+    const newUser = {
+      email,
+      password: hashedPassword,
+      _id: uuidv4(), // Generate a unique id
+    };
+
+    // Insert the new user into the database
+    const result = await usersCollection.insertOne(newUser);
+
+    if (result.insertedCount === 1) {
+      return res.status(201).json({ email: newUser.email, id: newUser._id });
+    } else {
+      return res.status(500).json({ error: 'Internal Server Error' });
+    }
+  } catch (error) {
+    console.error('Error creating user:', error);
+    return res.status(500).json({ error: 'Internal Server Error' });
+  }
+};
+
